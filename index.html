@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dead Drop District | Playable Prototype</title>
+  <meta
+    name="description"
+    content="A playable HTML extraction shooter prototype with movement, shooting, loot, enemies, and extraction."
+  />
+  <link
+    rel="icon"
+    href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230b1118'/%3E%3Cpath d='M10 44V18h24l10 10v16H10Zm8-8h18V29.5L30.5 24H18v12Z' fill='%23ffb74d'/%3E%3Cpath d='M40 20h14v8H40zM40 34h10v8H40z' fill='%234ac2c5'/%3E%3C/svg%3E"
+  />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="playfield">
+    <canvas id="game" width="1280" height="720" aria-label="Extraction shooter playfield"></canvas>
+    <div class="visual-overlay" id="visual-overlay" aria-hidden="true"></div>
+
+    <div class="reticle" id="reticle" aria-hidden="true">
+      <svg class="reticle__arc" viewBox="0 0 40 40" aria-hidden="true">
+        <circle class="reticle__arc-track" cx="20" cy="20" r="17"></circle>
+        <circle class="reticle__arc-fill" id="reticle-ammo-ring" cx="20" cy="20" r="17"></circle>
+      </svg>
+      <span class="reticle__core"></span>
+    </div>
+    <div class="interact-prompt" id="interact-prompt">Press E to interact</div>
+
+    <header class="top-hud">
+      <div class="brand-mark">
+        <p class="eyebrow">Dead Drop District</p>
+        <h1>Freight Quarter</h1>
+        <p class="operator-mark" id="operator-mark">District Ghost // Operator</p>
+        <p class="squad-mark" id="squad-value">Squad 1 / 1 live</p>
+      </div>
+
+      <div class="objective-chip">
+        <span class="label">Objective</span>
+        <strong id="loot-value">0 / 3 cores</strong>
+        <span class="objective-subline" id="extraction-value">Extract east • 0m</span>
+      </div>
+    </header>
+
+    <aside class="left-hud">
+      <div class="hud-card compact-card hud-card--vitals">
+        <div class="stat-line">
+          <span class="label">Vitals</span>
+          <strong id="health-value">2 / 2</strong>
+        </div>
+        <div class="cell-strip health-cells" id="health-cells"></div>
+      </div>
+
+      <div class="hud-card compact-card hud-card--ammo">
+        <div class="stat-line">
+          <span class="label">Ammo</span>
+          <strong id="ammo-value">18 / 18</strong>
+        </div>
+        <div class="meter">
+          <div class="meter-fill ammo-fill" id="ammo-fill"></div>
+        </div>
+      </div>
+
+      <div class="hud-card compact-card hud-card--shield">
+        <div class="stat-line">
+          <span class="label">Shield</span>
+          <strong id="shield-value">offline</strong>
+        </div>
+        <div class="cell-strip shield-cells" id="shield-cells"></div>
+      </div>
+
+      <div class="hud-card compact-card hud-card--stealth">
+        <div class="stat-line">
+          <span class="label">Stealth</span>
+          <strong id="stealth-value">open</strong>
+        </div>
+        <div class="ability-line">
+          <span class="label">Ability</span>
+          <strong id="ability-value">cloak ready</strong>
+        </div>
+        <div class="ability-line">
+          <span class="label">Exposure</span>
+          <strong id="stealth-detail-value">noise medium | eyes 0</strong>
+        </div>
+      </div>
+
+      <div class="hud-card compact-card hud-card--utility">
+        <div class="utility-pair">
+          <div class="utility-block">
+            <span class="label">Med</span>
+            <strong id="medkit-value">0</strong>
+          </div>
+          <div class="utility-block">
+            <span class="label">Tool</span>
+            <strong id="noise-value">0</strong>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <aside class="right-hud">
+      <div class="hud-card metric-card hud-card--time">
+        <span class="label">Time</span>
+        <strong id="timer-value">04:00</strong>
+      </div>
+      <div class="hud-card metric-card hud-card--cash">
+        <span class="label">Cash</span>
+        <strong id="cash-value">$0</strong>
+      </div>
+      <div class="hud-card metric-card hud-card--heat">
+        <span class="label">Heat</span>
+        <strong id="heat-value">1</strong>
+      </div>
+    </aside>
+
+    <div class="compass-hud">
+      <span>W</span>
+      <span>N</span>
+      <span>E</span>
+    </div>
+
+    <footer class="bottom-hud">
+      <div class="hud-card status-card">
+        <span class="label">Status</span>
+        <p id="status-text">Sweep the district, secure 3 relay cores, and get out alive.</p>
+      </div>
+    </footer>
+
+    <aside class="music-deck" id="music-deck" aria-hidden="true">
+      <div class="music-deck__header">
+        <span class="label">Signal Deck</span>
+        <strong id="music-deck-mode">auto</strong>
+      </div>
+      <div class="music-deck__buttons">
+        <button class="music-deck__button is-active" data-music-mode="auto" type="button">Auto</button>
+        <button class="music-deck__button" data-music-mode="intro" type="button">Intro</button>
+        <button class="music-deck__button" data-music-mode="freight" type="button">Freight</button>
+        <button class="music-deck__button" data-music-mode="freight-stealth" type="button">Freight Stealth</button>
+        <button class="music-deck__button" data-music-mode="shadow-stealth" type="button">Deep Stealth</button>
+        <button class="music-deck__button" data-music-mode="boss" type="button">Boss</button>
+        <button class="music-deck__button" data-music-mode="boss-alt" type="button">Alt Boss</button>
+        <button class="music-deck__button" data-music-mode="mute" type="button">Mute</button>
+      </div>
+      <div class="music-deck__admin dev-only">
+        <div class="music-deck__section-header">
+          <span class="label">Admin</span>
+          <strong id="admin-deck-status">offline</strong>
+        </div>
+        <div class="music-deck__buttons music-deck__buttons--admin">
+          <button class="music-deck__button music-deck__admin-button" data-admin-action="toggleInvisible" type="button">Invisibility</button>
+          <button class="music-deck__button music-deck__admin-button" data-admin-action="toggleGodMode" type="button">Godmode</button>
+          <button class="music-deck__button music-deck__admin-button" data-admin-action="heal" type="button">Heal</button>
+          <button class="music-deck__button music-deck__admin-button" data-admin-action="refillAmmo" type="button">Refill Ammo</button>
+          <button class="music-deck__button music-deck__admin-button" data-admin-action="restoreShield" type="button">Restore Shield</button>
+        </div>
+      </div>
+      <label class="music-deck__select-row" for="visual-mode-inline">
+        <span class="label">Shader</span>
+        <select id="visual-mode-inline">
+          <option value="clean">Clean</option>
+          <option value="vhs">VHS</option>
+          <option value="pixel">Pixel</option>
+          <option value="surveillance">Surveillance</option>
+          <option value="amber">Amber CRT</option>
+          <option value="blueprint">Blueprint</option>
+          <option value="nightvision">Night Vision</option>
+        </select>
+      </label>
+      <p class="music-deck__hint">Press M to open signal deck. Auto follows location and stealth.</p>
+    </aside>
+
+    <section class="overlay is-visible" id="start-overlay">
+      <div class="overlay-card intro-card">
+        <div class="intro-shell">
+          <div class="intro-main">
+            <p class="eyebrow">Live Contract // District Lockdown</p>
+            <h2>Dead Drop District</h2>
+            <div class="intro-mission">
+              <span class="mission-chip">Freight Quarter</span>
+              <p>Secure the relay package, break contact fast, and clear the gate before the district seals.</p>
+            </div>
+            <div class="class-picker" id="class-picker">
+              <button class="class-card is-selected" data-class="stealther" type="button">
+                <span class="label">Stealther</span>
+                <strong>Suppressed Sidearm</strong>
+                <span class="class-copy">2 HP • Cloak • Low noise</span>
+              </button>
+              <button class="class-card" data-class="breacher" type="button">
+                <span class="label">Breacher</span>
+                <strong>Shotgun</strong>
+                <span class="class-copy">3 HP • 2 shield • Heavy push</span>
+              </button>
+              <button class="class-card" data-class="marksman" type="button">
+                <span class="label">Marksman</span>
+                <strong>Carbine</strong>
+                <span class="class-copy">2 HP • 1 shield • Mid-range control</span>
+              </button>
+            </div>
+            <div class="intro-actions">
+              <button class="action-button" id="start-button" type="button">Start Raid</button>
+              <div class="prep-panel">
+                <div class="prep-header">
+                  <span class="label">Prep Credits</span>
+                  <strong id="bank-value">$0</strong>
+                </div>
+                <div class="shop-grid">
+                  <button class="shop-button" data-item="medkits" type="button">
+                    <span class="label">Field Medkit</span>
+                    <strong>$120</strong>
+                    <span class="shop-copy">+1 medkit next run</span>
+                    <span class="pending-count" data-pending></span>
+                  </button>
+                  <button class="shop-button" data-item="noiseCharges" type="button">
+                    <span class="label">Noise Maker</span>
+                    <strong>$90</strong>
+                    <span class="shop-copy">+1 distraction tool</span>
+                    <span class="pending-count" data-pending></span>
+                  </button>
+                  <button class="shop-button" data-item="shieldCells" type="button">
+                    <span class="label">Shield Cells</span>
+                    <strong>$140</strong>
+                    <span class="shop-copy">Fresh shield if supported</span>
+                    <span class="pending-count" data-pending></span>
+                  </button>
+                </div>
+                <button class="minor-button" id="shop-reset" type="button">Refund staged prep</button>
+              </div>
+            </div>
+          </div>
+          <div class="intro-controls">
+            <div class="intro-rail-block">
+              <span class="label">Field Notes</span>
+              <p class="intro-note">Stealth opens the lane. Heat turns the district violent. Extract before the lockdown closes.</p>
+            </div>
+            <div class="intro-rail-block profile-panel">
+              <span class="label">Operator Profile</span>
+              <label class="profile-row" for="profile-display-name">
+                <span>Callsign</span>
+                <input id="profile-display-name" type="text" maxlength="24" placeholder="Operator" />
+              </label>
+              <label class="profile-row" for="profile-title">
+                <span>Title</span>
+                <input id="profile-title" type="text" maxlength="32" placeholder="District Ghost" />
+              </label>
+              <p class="profile-preview" id="profile-preview">District Ghost // Operator</p>
+            </div>
+            <div class="intro-rail-block">
+              <span class="label">Controls</span>
+              <ul class="overlay-list">
+                <li><kbd>WASD</kbd><span>move</span></li>
+                <li><kbd>Mouse</kbd><span>aim</span></li>
+                <li><kbd>Click</kbd><span>shoot</span></li>
+                <li><kbd>R</kbd><span>reload</span></li>
+                <li><kbd>Q</kbd><span>medkit</span></li>
+                <li><kbd>G</kbd><span>noise</span></li>
+                <li><kbd>E</kbd><span>interact</span></li>
+                <li><kbd>F</kbd><span>knife</span></li>
+                <li><kbd>C</kbd><span>ability</span></li>
+                <li><kbd>M</kbd><span>music player</span></li>
+                <li><kbd>Ctrl</kbd><span>stealth</span></li>
+                <li><kbd>Shift</kbd><span>sprint</span></li>
+              </ul>
+            </div>
+            <div class="audio-panel">
+              <span class="label">Audio</span>
+              <label class="slider-row" for="music-slider">
+                <span>Music</span>
+                <input id="music-slider" type="range" min="0" max="100" value="72" />
+                <strong id="music-slider-value">72</strong>
+              </label>
+              <label class="slider-row" for="sfx-slider">
+                <span>SFX</span>
+                <input id="sfx-slider" type="range" min="0" max="100" value="100" />
+                <strong id="sfx-slider-value">100</strong>
+              </label>
+              <label class="slider-row shader-row" for="visual-mode-select">
+                <span>Shader</span>
+                <select id="visual-mode-select">
+                  <option value="clean">Clean</option>
+                  <option value="vhs">VHS</option>
+                  <option value="pixel">Pixel</option>
+                  <option value="surveillance">Surveillance</option>
+                  <option value="amber">Amber CRT</option>
+                  <option value="blueprint">Blueprint</option>
+                  <option value="nightvision">Night Vision</option>
+                </select>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="overlay" id="breach-overlay">
+      <div class="overlay-card breach-card">
+        <p class="eyebrow">Transit Hold // Reactor Breach</p>
+        <h2>Refit Before Entry</h2>
+        <p>Spend current raid cash on one class refit and one utility package before the reactor push.</p>
+        <div class="breach-header">
+          <span class="label">Raid Cash</span>
+          <strong id="breach-cash-value">$0</strong>
+        </div>
+        <div class="breach-section">
+          <span class="label">Class Refit</span>
+          <div class="upgrade-grid" id="breach-class-grid"></div>
+        </div>
+        <div class="breach-section">
+          <span class="label">Utility Package</span>
+          <div class="upgrade-grid" id="breach-utility-grid"></div>
+        </div>
+        <p class="breach-summary" id="breach-summary">Class refit: none. Utility package: none.</p>
+        <div class="breach-actions">
+          <button class="minor-button" id="breach-skip" type="button">Skip Refit</button>
+          <button class="action-button" id="breach-continue" type="button">Breach Reactor</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="overlay" id="end-overlay">
+      <div class="overlay-card">
+        <p class="eyebrow" id="end-tag">raid complete</p>
+        <h2 id="end-title">Extraction Confirmed</h2>
+        <p id="end-summary">You made it out with the package.</p>
+        <p class="restart-status" id="restart-status-text">Press Run It Back to restart the raid.</p>
+        <div class="restart-presence" id="restart-presence">Ready: 0 / 1</div>
+        <button class="action-button" id="restart-button" type="button">Run It Back</button>
+      </div>
+    </section>
+
+    <aside class="debug-overlay dev-only" id="debug-overlay" aria-hidden="true">
+      <div class="debug-overlay__header">
+        <span class="label">Co-op Debug</span>
+        <strong id="debug-socket-state">offline</strong>
+      </div>
+      <div class="debug-overlay__grid" id="debug-grid"></div>
+      <div class="debug-overlay__actions">
+        <button class="minor-button debug-action-button" data-debug-action="forceRestart" type="button">Force Restart</button>
+        <button class="minor-button debug-action-button" data-debug-action="killSelf" type="button">Kill Self</button>
+        <button class="minor-button debug-action-button" data-debug-action="reconnect" type="button">Reconnect</button>
+        <button class="minor-button debug-action-button" data-debug-action="copy" type="button">Copy Debug</button>
+      </div>
+      <div class="debug-overlay__events" id="debug-events"></div>
+    </aside>
+  </main>
+
+    <script src="client/config.js"></script>
+    <script src="shared/protocol.js"></script>
+    <script src="shared/session-config.js"></script>
+    <script src="shared/asset-rendering.js"></script>
+    <script src="app.js"></script>
+    <script src="client/network.js"></script>
+  </body>
+</html>

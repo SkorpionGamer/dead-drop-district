@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dead Drop District | Level Editor</title>
+  <meta
+    name="description"
+    content="Standalone level editor for Dead Drop District layouts, spawn points, enemies, zones, and decor placement."
+  />
+  <link rel="stylesheet" href="editor.css" />
+</head>
+<body>
+  <main class="editor-shell">
+    <aside class="editor-panel editor-panel--left">
+      <div class="panel-card panel-card--hero">
+        <p class="eyebrow">Dead Drop District</p>
+        <h1>Level Editor</h1>
+        <p class="panel-copy">
+          Smart select is on. Click any visible object to edit or move it, and the editor will switch to the right layer for you.
+        </p>
+        <div class="button-row">
+          <button id="reload-source" type="button">Reload From app.js</button>
+          <button id="save-source" type="button">Save To app.js</button>
+          <button id="reset-view" type="button">Frame World</button>
+        </div>
+        <div class="button-row">
+          <button id="undo-action" type="button">Undo</button>
+          <button id="redo-action" type="button">Redo</button>
+        </div>
+        <p class="status-line" id="source-status">Loading layout data...</p>
+      </div>
+
+      <div class="panel-card panel-card--control">
+        <label class="field">
+          <span>Level</span>
+          <select id="level-select"></select>
+        </label>
+        <label class="field">
+          <span>Edit Layer</span>
+          <select id="layer-select"></select>
+        </label>
+        <div class="button-row">
+          <button id="tool-select" type="button" class="is-active">Select</button>
+          <button id="tool-add" type="button">Add</button>
+        </div>
+        <div class="button-row">
+          <button id="duplicate-entity" type="button">Duplicate</button>
+          <button id="delete-entity" type="button">Delete</button>
+        </div>
+      </div>
+
+      <details class="panel-card collapsible-card">
+        <summary class="section-header section-header--summary">
+          <h2>Layer Controls</h2>
+          <span>View</span>
+        </summary>
+        <div class="layer-controls" id="layer-controls"></div>
+      </details>
+
+      <div class="panel-card">
+        <div class="section-header">
+          <h2>Asset Palette</h2>
+          <span id="asset-count">0</span>
+        </div>
+        <label class="field field--compact">
+          <span>Filter</span>
+          <input id="asset-filter" type="text" placeholder="Search all map assets" />
+        </label>
+        <div class="asset-palette" id="asset-palette"></div>
+      </div>
+
+      <details class="panel-card collapsible-card">
+        <summary class="section-header section-header--summary">
+          <h2>Level Meta</h2>
+          <span>Occasional</span>
+        </summary>
+        <form id="level-meta-form" class="stack-form"></form>
+      </details>
+
+      <div class="panel-card panel-card--grow">
+        <div class="section-header">
+          <h2>Entities</h2>
+          <span id="entity-count">0</span>
+        </div>
+        <label class="field field--compact">
+          <span>Search</span>
+          <input id="entity-filter" type="text" placeholder="Filter current layer" />
+        </label>
+        <div class="entity-list" id="entity-list"></div>
+      </div>
+    </aside>
+
+    <section class="editor-canvas-shell">
+      <header class="editor-toolbar">
+        <div class="toolbar-chip">
+          <span>Mode</span>
+          <strong id="tool-readout">Select</strong>
+        </div>
+        <div class="toolbar-chip toolbar-chip--wide">
+          <span>Add Target</span>
+          <strong id="asset-target-readout">Manual</strong>
+        </div>
+        <div class="toolbar-chip toolbar-chip--inline">
+          <span>Smart Add</span>
+          <button id="smart-placement-toggle" type="button" class="toolbar-toggle is-active">Auto</button>
+        </div>
+        <div class="toolbar-chip toolbar-chip--inline">
+          <span>Edit Bounds</span>
+          <button id="bounds-mode-toggle" type="button" class="toolbar-toggle is-active">Collision</button>
+        </div>
+        <div class="toolbar-chip toolbar-chip--inline">
+          <span>Auto Fit</span>
+          <button id="auto-fit-toggle" type="button" class="toolbar-toggle is-active">On</button>
+        </div>
+        <div class="toolbar-chip toolbar-chip--inline">
+          <span>Snap Grid</span>
+          <div class="toolbar-inline-group">
+            <button id="snap-toggle" type="button" class="toolbar-toggle">Off</button>
+            <select id="snap-size-select" aria-label="Snap grid size">
+              <option value="25">25</option>
+              <option value="50">50</option>
+              <option value="100" selected>100</option>
+              <option value="200">200</option>
+            </select>
+          </div>
+        </div>
+        <div class="toolbar-chip toolbar-chip--inline">
+          <span>Rotate</span>
+          <div class="toolbar-inline-group">
+            <button id="rotate-left" type="button" class="toolbar-toggle">Left</button>
+            <button id="rotate-right" type="button" class="toolbar-toggle">Right</button>
+          </div>
+        </div>
+        <div class="toolbar-chip toolbar-chip--inline">
+          <span>Building Shell</span>
+          <select id="building-tool-select" aria-label="Building shell tool">
+            <option value="off" selected>Off</option>
+            <option value="door">Door</option>
+            <option value="window">Window</option>
+            <option value="seal">Seal</option>
+          </select>
+        </div>
+        <div class="toolbar-chip toolbar-chip--inline">
+          <span>Playtest</span>
+          <button id="playtest-toggle" type="button" class="toolbar-toggle">Off</button>
+        </div>
+        <div class="toolbar-chip">
+          <span>Zoom</span>
+          <strong id="zoom-readout">100%</strong>
+        </div>
+        <div class="toolbar-chip">
+          <span>Cursor</span>
+          <strong id="cursor-readout">0, 0</strong>
+        </div>
+        <div class="toolbar-chip">
+          <span>Selection</span>
+          <strong id="selection-readout">none</strong>
+        </div>
+      </header>
+
+      <div class="canvas-frame">
+        <canvas id="editor-canvas" width="1400" height="900" aria-label="Dead Drop District level editor canvas"></canvas>
+      </div>
+
+      <footer class="editor-hintbar">
+        <span>Click anything visible to select it.</span>
+        <span>Use `Edit Bounds` to switch between collision and visual boxes. Drag inside moves. Drag the handles to resize. Drag empty space for marquee selection.</span>
+        <span>Wheel zooms. Right or middle drag pans.</span>
+        <span>Smart Add uses the selected asset target. Lamp and floodlight assets route into the Lights layer. Snap Grid locks placement and dragging. Use Rotate buttons or `Q/E` and `R/F` to turn selection. Building Shell mode snaps doors and windows to a selected building grid. `P` toggles playtest, `WASD` moves, `E` toggles doors.</span>
+      </footer>
+    </section>
+
+    <aside class="editor-panel editor-panel--right">
+      <div class="panel-card panel-card--hero panel-card--grow">
+        <div class="section-header">
+          <h2>Inspector</h2>
+          <span id="inspector-layer">No selection</span>
+        </div>
+        <form id="inspector-form" class="stack-form">
+          <p class="empty-state">Select an entity to edit its properties.</p>
+        </form>
+      </div>
+
+      <details class="panel-card collapsible-card">
+        <summary class="section-header section-header--summary">
+          <h2>Export</h2>
+          <span>JSON</span>
+        </summary>
+        <div class="button-row button-row--stack">
+          <button id="copy-layer-json" type="button">Copy Current Layer JSON</button>
+          <button id="copy-level-json" type="button">Copy Full Level JSON</button>
+          <button id="copy-workspace-json" type="button">Copy All Levels JSON</button>
+          <button id="download-level-json" type="button">Download Level JSON</button>
+        </div>
+        <p class="panel-copy small-copy">
+          Exported data is plain JSON using the runtime structure the game already consumes.
+        </p>
+      </details>
+
+      <details class="panel-card collapsible-card" open>
+        <summary class="section-header section-header--summary">
+          <h2>Validation</h2>
+          <span id="validation-count">0</span>
+        </summary>
+        <div class="validation-list" id="validation-list"></div>
+      </details>
+    </aside>
+  </main>
+
+  <datalist id="asset-options"></datalist>
+  <script src="shared/asset-rendering.js"></script>
+  <script src="editor.js"></script>
+</body>
+</html>

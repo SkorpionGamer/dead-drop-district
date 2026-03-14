@@ -1,0 +1,11 @@
+node_modules/
+output/
+test-results/
+.playwright-cli/
+tools/aseprite/
+
+app.js.level-editor.bak
+
+*.log
+Thumbs.db
+.DS_Store

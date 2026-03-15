@@ -375,3 +375,14 @@ Current status after this pass:
 - for live multiplayer sessions, the browser host is no longer the producer of enemy movement/sensing/combat truth
 - the server is now the producer of enemy movement/state, hostile shots, bullet stepping, projectile/contact damage, heat escalation, containment release, alert spread, loot/extraction progression, and room outcome transitions
 - the remaining compatibility bridge is limited to initial combat seeding after a fresh world init plus older offline/local-host play paths
+
+Railway deployment fix:
+- Railway logs exposed a production crash on the first shot/reload: `ReferenceError: broadcastCombatEvent is not defined`
+- root cause: top-level authoritative combat helpers were calling `broadcastCombatEvent(...)` directly even though the actual broadcaster lives inside `createAppServer()`
+- fixed by threading `broadcastCombatEvent` through the server tick as an explicit emitter, matching the existing `broadcastUiEvent` pattern
+- `processPlayerCombatActions(room, emitters)` and `simulateAuthoritativeCombat(room, dt, emitters)` now emit through `emitters.broadcastCombatEvent?.(...)`
+- authoritative simulation timer now passes both `broadcastCombatEvent` and `broadcastUiEvent` into the combat helpers
+
+Validation:
+- `node --check server/server.js`
+- Playwright smoke suite still passes: `12 passed`

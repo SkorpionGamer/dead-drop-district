@@ -2233,9 +2233,10 @@ function simulatePlayers(room) {
   }
 }
 
-function processPlayerCombatActions(room) {
+function processPlayerCombatActions(room, emitters = {}) {
   let mutated = false;
   const now = Date.now();
+  const emitCombatEvent = (kind, payload) => emitters.broadcastCombatEvent?.(kind, payload);
 
   if (!room.combat) {
     room.combat = createEmptyCombatState(room.world?.layoutId || "freight");
@@ -2292,7 +2293,7 @@ function processPlayerCombatActions(room) {
         for (const spread of spreads) {
           room.combat.bullets.push(createPlayerBullet(player, player.position.angle + spread, loadout, shotToken));
         }
-        broadcastCombatEvent(COMBAT_EVENT_KIND.SHOT, {
+        emitCombatEvent(COMBAT_EVENT_KIND.SHOT, {
           ...actorPayload,
           shotToken,
           spreads,
@@ -2307,7 +2308,7 @@ function processPlayerCombatActions(room) {
       player.runtime.reloadCompleteAt = now + reloadMs;
       player.runtime.nextShootAt = Math.max(player.runtime.nextShootAt || 0, player.runtime.reloadCompleteAt);
       mutated = true;
-      broadcastCombatEvent(COMBAT_EVENT_KIND.RELOAD, {
+      emitCombatEvent(COMBAT_EVENT_KIND.RELOAD, {
         ...actorPayload,
         durationMs: reloadMs,
         serverTime: now,
@@ -2324,7 +2325,7 @@ function processPlayerCombatActions(room) {
       player.resources.hp = Math.min(player.resources.maxHp || 1, (player.resources.hp || 0) + 1);
       player.runtime.nextMedkitAt = now + PLAYER_ACTION_COOLDOWNS_MS.medkit;
       mutated = true;
-      broadcastCombatEvent(COMBAT_EVENT_KIND.MEDKIT, {
+      emitCombatEvent(COMBAT_EVENT_KIND.MEDKIT, {
         ...actorPayload,
         serverTime: now,
       });
@@ -2341,7 +2342,7 @@ function processPlayerCombatActions(room) {
         ttlMs: 2200,
       });
       mutated = true;
-      broadcastCombatEvent(COMBAT_EVENT_KIND.NOISE, {
+      emitCombatEvent(COMBAT_EVENT_KIND.NOISE, {
         ...actorPayload,
         target:
           frame.noiseTarget && Number.isFinite(frame.noiseTarget.x) && Number.isFinite(frame.noiseTarget.y)
@@ -2356,7 +2357,7 @@ function processPlayerCombatActions(room) {
       player.runtime.abilityCooldownUntil = now + Math.max(2000, loadout.abilityCooldown * 1000);
       player.runtime.invisible = true;
       mutated = true;
-      broadcastCombatEvent(COMBAT_EVENT_KIND.ABILITY, {
+      emitCombatEvent(COMBAT_EVENT_KIND.ABILITY, {
         ...actorPayload,
         ability: loadout.ability,
         durationMs: Math.max(600, loadout.abilityDuration * 1000),
@@ -2367,7 +2368,7 @@ function processPlayerCombatActions(room) {
 
     if (frame.adminPressed && frame.adminAction && applyServerAdminAction(player, frame.adminAction)) {
       mutated = true;
-      broadcastCombatEvent(COMBAT_EVENT_KIND.ADMIN, {
+      emitCombatEvent(COMBAT_EVENT_KIND.ADMIN, {
         ...actorPayload,
         adminAction: frame.adminAction,
         serverTime: now,
@@ -2376,7 +2377,7 @@ function processPlayerCombatActions(room) {
 
     if (frame.takedownPressed && now >= (player.runtime.nextTakedownAt || 0)) {
       player.runtime.nextTakedownAt = now + PLAYER_ACTION_COOLDOWNS_MS.takedown;
-      broadcastCombatEvent(COMBAT_EVENT_KIND.TAKEDOWN, {
+      emitCombatEvent(COMBAT_EVENT_KIND.TAKEDOWN, {
         ...actorPayload,
         serverTime: now,
       });
@@ -2397,6 +2398,7 @@ function simulateAuthoritativeCombat(room, dt, emitters = {}) {
   let worldMutated = false;
   const now = Date.now();
   const enemyList = Array.isArray(room.combat.enemies) ? room.combat.enemies : [];
+  const emitCombatEvent = (kind, payload) => emitters.broadcastCombatEvent?.(kind, payload);
 
   room.combat.bullets = room.combat.bullets.filter((bullet) => {
     bullet.prevX = bullet.x;
@@ -2454,7 +2456,7 @@ function simulateAuthoritativeCombat(room, dt, emitters = {}) {
           enemy.shieldEquipped = false;
           enemy.shieldHp = 0;
         }
-        broadcastCombatEvent(COMBAT_EVENT_KIND.HIT, {
+        emitCombatEvent(COMBAT_EVENT_KIND.HIT, {
           enemyId: enemy.id,
           ownerId: bullet.ownerId || null,
           x: bullet.x,
@@ -2472,7 +2474,7 @@ function simulateAuthoritativeCombat(room, dt, emitters = {}) {
       enemy.hitFlash = 1;
       enemy.flinchTimer = 0.16;
       enemy.woundSourceAngle = Math.atan2(bullet.vy, bullet.vx);
-      broadcastCombatEvent(COMBAT_EVENT_KIND.HIT, {
+      emitCombatEvent(COMBAT_EVENT_KIND.HIT, {
         enemyId: enemy.id,
         ownerId: bullet.ownerId || null,
         x: bullet.x,
@@ -2493,7 +2495,7 @@ function simulateAuthoritativeCombat(room, dt, emitters = {}) {
         if (owner) {
           owner.resources.cash = Math.max(0, (owner.resources.cash || 0) + 75);
         }
-        broadcastCombatEvent(COMBAT_EVENT_KIND.DEATH, {
+        emitCombatEvent(COMBAT_EVENT_KIND.DEATH, {
           enemyId: enemy.id,
           ownerId: bullet.ownerId || null,
           x: enemy.x,
@@ -2571,7 +2573,7 @@ function simulateAuthoritativeCombat(room, dt, emitters = {}) {
         player.runtime.running = false;
       }
 
-      broadcastCombatEvent(COMBAT_EVENT_KIND.PLAYER_HIT, {
+      emitCombatEvent(COMBAT_EVENT_KIND.PLAYER_HIT, {
         playerId: player.id,
         ownerEnemyId: bullet.ownerEnemyId || null,
         x: bullet.x,
@@ -2650,7 +2652,7 @@ function simulateAuthoritativeCombat(room, dt, emitters = {}) {
       room.combat.enemyBullets.push(createEnemyBullet(enemy, enemy.aimAngle + spread, bulletSpeed, bulletId));
     }
 
-    broadcastCombatEvent(COMBAT_EVENT_KIND.ENEMY_SHOT, {
+    emitCombatEvent(COMBAT_EVENT_KIND.ENEMY_SHOT, {
       enemyId: enemy.id,
       kind: enemy.kind || "guard",
       x: enemy.x,
@@ -2702,7 +2704,7 @@ function simulateAuthoritativeCombat(room, dt, emitters = {}) {
       targetInfo.player.runtime.running = false;
     }
 
-    broadcastCombatEvent(COMBAT_EVENT_KIND.PLAYER_HIT, {
+    emitCombatEvent(COMBAT_EVENT_KIND.PLAYER_HIT, {
       playerId: targetInfo.player.id,
       enemyId: enemy.id,
       x: targetInfo.player.position.x,
@@ -3196,9 +3198,12 @@ function createAppServer() {
   const snapshotTimer = setInterval(broadcastSnapshot, MULTIPLAYER.snapshotRateMs);
   const simulationTimer = setInterval(() => {
     simulatePlayers(room);
-    const playerCombatMutated = processPlayerCombatActions(room);
+    const playerCombatMutated = processPlayerCombatActions(room, {
+      broadcastCombatEvent,
+    });
     const { combatMutated: enemyCombatMutated, worldMutated: enemyWorldMutated } = simulateEnemyAuthority(room, MULTIPLAYER.tickRateMs / 1000);
     const { combatMutated, worldMutated } = simulateAuthoritativeCombat(room, MULTIPLAYER.tickRateMs / 1000, {
+      broadcastCombatEvent,
       broadcastUiEvent,
     });
     const encounterMutated = updateEncounterAuthority(room);

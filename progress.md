@@ -386,3 +386,24 @@ Railway deployment fix:
 Validation:
 - `node --check server/server.js`
 - Playwright smoke suite still passes: `12 passed`
+
+Hosted performance hardening pass:
+- added lightweight runtime diagnostics to `server/server.js` so `/health` now reports:
+- phase / connected player count
+- uptime
+- tick average / max
+- event-loop lag current / max
+- snapshot average / max
+- last snapshot size / recipient count
+- snapshot backpressure drops / send errors
+- added throttled diagnostic warnings when the server tick or snapshot work runs slow enough to matter on hosted instances
+- reduced avoidable hosted traffic by coalescing snapshots instead of burst-broadcasting them on every mutation:
+- world mutations, raid transitions, reconnects, restart commits, player removal, legacy world patches, and combat merges now mark snapshots dirty instead of instantly pushing another full delta on top of the regular snapshot loop
+- snapshot loop now sends at a hosted-safe interval and keeps idle sessions on a light keepalive instead of hammering full deltas unnecessarily
+- snapshot broadcasting now serializes once per payload and reuses that buffer for every client instead of `JSON.stringify` per client send
+- added WebSocket backpressure protection for delta snapshots so slow clients do not endlessly accumulate buffered snapshot data on the server
+
+Validation:
+- `node --check server/server.js`
+- `node --check tests/smoke.spec.js`
+- Playwright smoke suite still passes: `12 passed`

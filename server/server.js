@@ -72,6 +72,13 @@ const LEVEL_DURATIONS_SECONDS = Object.freeze({
   admin: 270,
   reactor: 240,
 });
+const IS_HOSTED_RUNTIME = process.env.NODE_ENV === "production" || Boolean(process.env.RAILWAY_ENVIRONMENT);
+const SNAPSHOT_INTERVAL_MS = IS_HOSTED_RUNTIME ? Math.max(MULTIPLAYER.snapshotRateMs, 84) : MULTIPLAYER.snapshotRateMs;
+const SNAPSHOT_BACKPRESSURE_BYTES = IS_HOSTED_RUNTIME ? 256 * 1024 : 1024 * 1024;
+const SNAPSHOT_IDLE_KEEPALIVE_MS = 1000;
+const DIAGNOSTIC_LOG_INTERVAL_MS = 15000;
+const SLOW_TICK_WARN_MS = IS_HOSTED_RUNTIME ? 32 : 45;
+const SLOW_SNAPSHOT_WARN_MS = IS_HOSTED_RUNTIME ? 28 : 40;
 
 function collectAssetFiles(rootDir, currentDir = rootDir, results = []) {
   const entries = fs.readdirSync(currentDir, { withFileTypes: true });
@@ -239,8 +246,40 @@ function createRoom() {
     enemyAlertLocks: new Map(),
     recentSignals: [],
     phaseLock: null,
+    createdAt: Date.now(),
     lastSimulatedAt: Date.now(),
+    lastTickAt: Date.now(),
+    snapshot: {
+      dirty: true,
+      lastReason: "boot",
+      lastSentAt: 0,
+    },
+    diagnostics: {
+      tickCount: 0,
+      tickAvgMs: 0,
+      tickMaxMs: 0,
+      eventLoopLagMs: 0,
+      eventLoopLagMaxMs: 0,
+      snapshotCount: 0,
+      snapshotAvgMs: 0,
+      snapshotMaxMs: 0,
+      snapshotBackpressureDrops: 0,
+      snapshotSendErrors: 0,
+      lastSnapshotBytes: 0,
+      lastSnapshotRecipients: 0,
+      lastSnapshotReason: "boot",
+      lastSlowTickAt: 0,
+      lastSlowSnapshotAt: 0,
+      lastDiagnosticsLogAt: 0,
+    },
   };
+}
+
+function updateMovingAverage(previous, next, count) {
+  if (!(count > 1)) {
+    return next;
+  }
+  return previous + (next - previous) / count;
 }
 
 function finiteNumber(value, fallback) {
@@ -2741,10 +2780,72 @@ function simulateAuthoritativeCombat(room, dt, emitters = {}) {
 function createAppServer() {
   const room = createRoom();
 
+  function markSnapshotDirty(reason = "") {
+    room.snapshot.dirty = true;
+    if (reason) {
+      room.snapshot.lastReason = reason;
+    }
+  }
+
+  function maybeLogDiagnostics(reason, details = {}) {
+    const now = Date.now();
+    if (now - room.diagnostics.lastDiagnosticsLogAt < DIAGNOSTIC_LOG_INTERVAL_MS) {
+      return;
+    }
+    room.diagnostics.lastDiagnosticsLogAt = now;
+    console.warn(
+      `[diag] ${reason} tickAvg=${room.diagnostics.tickAvgMs.toFixed(1)}ms tickMax=${room.diagnostics.tickMaxMs.toFixed(1)}ms ` +
+        `lag=${room.diagnostics.eventLoopLagMs.toFixed(1)}ms lagMax=${room.diagnostics.eventLoopLagMaxMs.toFixed(1)}ms ` +
+        `snapAvg=${room.diagnostics.snapshotAvgMs.toFixed(1)}ms snapMax=${room.diagnostics.snapshotMaxMs.toFixed(1)}ms ` +
+        `snapBytes=${room.diagnostics.lastSnapshotBytes} recipients=${room.diagnostics.lastSnapshotRecipients} ` +
+        `drops=${room.diagnostics.snapshotBackpressureDrops} sendErrors=${room.diagnostics.snapshotSendErrors} ` +
+        `phase=${room.phase} players=${getConnectedPlayers(room).length} ${JSON.stringify(details)}`
+    );
+  }
+
+  function shouldSendIntervalSnapshot(now = Date.now()) {
+    const connectedCount = getConnectedPlayers(room).length;
+    if (!connectedCount) {
+      return false;
+    }
+    if (room.snapshot.dirty) {
+      return true;
+    }
+    if (room.phase === ROOM_PHASE.RUNNING || room.phase === ROOM_PHASE.BREACH_SHOP || room.phase === ROOM_PHASE.RESTART_WAIT) {
+      return true;
+    }
+    return now - room.snapshot.lastSentAt >= SNAPSHOT_IDLE_KEEPALIVE_MS;
+  }
+
   const server = http.createServer((req, res) => {
     if (req.url === "/health") {
       res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-      res.end(JSON.stringify({ ok: true, players: room.players.size }));
+      res.end(
+        JSON.stringify({
+          ok: true,
+          players: room.players.size,
+          connectedPlayers: getConnectedPlayers(room).length,
+          phase: room.phase,
+          roomId: room.id,
+          uptimeMs: Date.now() - room.createdAt,
+          worldVersion: room.worldVersion,
+          combatVersion: room.combatVersion,
+          snapshotDirty: room.snapshot.dirty,
+          diagnostics: {
+            tickAvgMs: Number(room.diagnostics.tickAvgMs.toFixed(2)),
+            tickMaxMs: Number(room.diagnostics.tickMaxMs.toFixed(2)),
+            eventLoopLagMs: Number(room.diagnostics.eventLoopLagMs.toFixed(2)),
+            eventLoopLagMaxMs: Number(room.diagnostics.eventLoopLagMaxMs.toFixed(2)),
+            snapshotAvgMs: Number(room.diagnostics.snapshotAvgMs.toFixed(2)),
+            snapshotMaxMs: Number(room.diagnostics.snapshotMaxMs.toFixed(2)),
+            lastSnapshotBytes: room.diagnostics.lastSnapshotBytes,
+            lastSnapshotRecipients: room.diagnostics.lastSnapshotRecipients,
+            snapshotBackpressureDrops: room.diagnostics.snapshotBackpressureDrops,
+            snapshotSendErrors: room.diagnostics.snapshotSendErrors,
+            lastSnapshotReason: room.diagnostics.lastSnapshotReason,
+          },
+        })
+      );
       return;
     }
 
@@ -2816,9 +2917,20 @@ function createAppServer() {
 
   const wss = new WebSocketServer({ server, path: "/ws" });
 
-  function send(socket, payload) {
-    if (socket.readyState === socket.OPEN) {
-      socket.send(JSON.stringify(payload));
+  function send(socket, payload, options = {}) {
+    if (socket.readyState !== socket.OPEN) {
+      return false;
+    }
+    if (options.dropIfBuffered && socket.bufferedAmount > SNAPSHOT_BACKPRESSURE_BYTES) {
+      room.diagnostics.snapshotBackpressureDrops += 1;
+      return false;
+    }
+    try {
+      socket.send(typeof payload === "string" ? payload : JSON.stringify(payload));
+      return true;
+    } catch {
+      room.diagnostics.snapshotSendErrors += 1;
+      return false;
     }
   }
 
@@ -2828,8 +2940,9 @@ function createAppServer() {
 
   function broadcastUiEvent(kind, payload = {}) {
     const event = createEventPayload(SERVER_MESSAGE.UI_EVENT, kind, { payload });
+    const serialized = JSON.stringify(event);
     for (const client of wss.clients) {
-      send(client, event);
+      send(client, serialized);
     }
   }
 
@@ -2840,16 +2953,18 @@ function createAppServer() {
       worldVersion: room.worldVersion,
       payload: action,
     });
+    const serialized = JSON.stringify(worldEvent);
     for (const client of wss.clients) {
-      send(client, worldEvent);
+      send(client, serialized);
     }
-    broadcastSnapshot();
+    markSnapshotDirty(`world:${action.type || WORLD_EVENT_KIND.SYNC}`);
   }
 
   function broadcastCombatEvent(kind, payload = {}) {
     const event = createEventPayload(SERVER_MESSAGE.COMBAT_EVENT, kind, { payload });
+    const serialized = JSON.stringify(event);
     for (const client of wss.clients) {
-      send(client, event);
+      send(client, serialized);
     }
   }
 
@@ -2975,7 +3090,7 @@ function createAppServer() {
           serverTime: Date.now(),
         });
       }
-      broadcastSnapshot();
+      markSnapshotDirty("raid_transition");
       return true;
     }
 
@@ -3005,11 +3120,30 @@ function createAppServer() {
     send(socket, buildSnapshot(kind));
   }
 
-  function broadcastSnapshot() {
+  function broadcastSnapshot(reason = room.snapshot.lastReason || "interval") {
+    const startedAt = Date.now();
     const snapshot = buildSnapshot(SERVER_MESSAGE.DELTA_SNAPSHOT);
+    const serialized = JSON.stringify(snapshot);
+    let recipientCount = 0;
 
     for (const client of wss.clients) {
-      send(client, snapshot);
+      if (send(client, serialized, { dropIfBuffered: true })) {
+        recipientCount += 1;
+      }
+    }
+    const durationMs = Date.now() - startedAt;
+    room.snapshot.dirty = false;
+    room.snapshot.lastSentAt = Date.now();
+    room.snapshot.lastReason = reason;
+    room.diagnostics.snapshotCount += 1;
+    room.diagnostics.snapshotAvgMs = updateMovingAverage(room.diagnostics.snapshotAvgMs, durationMs, room.diagnostics.snapshotCount);
+    room.diagnostics.snapshotMaxMs = Math.max(room.diagnostics.snapshotMaxMs, durationMs);
+    room.diagnostics.lastSnapshotBytes = Buffer.byteLength(serialized);
+    room.diagnostics.lastSnapshotRecipients = recipientCount;
+    room.diagnostics.lastSnapshotReason = reason;
+    if (durationMs >= SLOW_SNAPSHOT_WARN_MS) {
+      room.diagnostics.lastSlowSnapshotAt = Date.now();
+      maybeLogDiagnostics("slow_snapshot", { durationMs, reason });
     }
   }
 
@@ -3109,6 +3243,7 @@ function createAppServer() {
     for (const client of wss.clients) {
       send(client, payload);
     }
+    markSnapshotDirty("restart_commit");
   }
 
   function sendHostHandoff(nextHostId) {
@@ -3192,11 +3327,18 @@ function createAppServer() {
     if (getConnectedPlayers(room).length > 0) {
       broadcastRestartStatus(room.restart.readyIds.size ? "Restart room updated." : "");
     }
-    broadcastSnapshot();
+    markSnapshotDirty("player_removed");
   }
 
-  const snapshotTimer = setInterval(broadcastSnapshot, MULTIPLAYER.snapshotRateMs);
+  const snapshotTimer = setInterval(() => {
+    if (shouldSendIntervalSnapshot()) {
+      broadcastSnapshot(room.snapshot.dirty ? room.snapshot.lastReason : "interval");
+    }
+  }, SNAPSHOT_INTERVAL_MS);
   const simulationTimer = setInterval(() => {
+    const tickStartedAt = Date.now();
+    const eventLoopLagMs = Math.max(0, tickStartedAt - room.lastTickAt - MULTIPLAYER.tickRateMs);
+    room.lastTickAt = tickStartedAt;
     simulatePlayers(room);
     const playerCombatMutated = processPlayerCombatActions(room, {
       broadcastCombatEvent,
@@ -3215,7 +3357,17 @@ function createAppServer() {
     }
     recomputeRoomPhase();
     if (playerCombatMutated || enemyCombatMutated || combatMutated || enemyWorldMutated || worldMutated || encounterMutated) {
-      broadcastSnapshot();
+      markSnapshotDirty("simulation");
+    }
+    const tickDurationMs = Date.now() - tickStartedAt;
+    room.diagnostics.tickCount += 1;
+    room.diagnostics.tickAvgMs = updateMovingAverage(room.diagnostics.tickAvgMs, tickDurationMs, room.diagnostics.tickCount);
+    room.diagnostics.tickMaxMs = Math.max(room.diagnostics.tickMaxMs, tickDurationMs);
+    room.diagnostics.eventLoopLagMs = eventLoopLagMs;
+    room.diagnostics.eventLoopLagMaxMs = Math.max(room.diagnostics.eventLoopLagMaxMs, eventLoopLagMs);
+    if (tickDurationMs >= SLOW_TICK_WARN_MS || eventLoopLagMs >= MULTIPLAYER.tickRateMs) {
+      room.diagnostics.lastSlowTickAt = Date.now();
+      maybeLogDiagnostics("slow_tick", { tickDurationMs, eventLoopLagMs });
     }
   }, MULTIPLAYER.tickRateMs);
   const stalePlayerTimer = setInterval(() => {
@@ -3246,7 +3398,7 @@ function createAppServer() {
     }
 
     sendWelcome(socket, player);
-    broadcastSnapshot();
+    markSnapshotDirty("connect");
 
     socket.on("message", (raw) => {
       let message;
@@ -3282,7 +3434,7 @@ function createAppServer() {
         applyHelloState(player, message);
         sendWelcome(socket, player);
         recomputeRoomPhase();
-        broadcastSnapshot();
+        markSnapshotDirty("hello");
         return;
       }
 
@@ -3297,7 +3449,7 @@ function createAppServer() {
         room.worldVersion += 1;
         room.combatVersion += 1;
         recomputeRoomPhase();
-        broadcastSnapshot();
+        markSnapshotDirty("world_init");
         return;
       }
 
@@ -3317,6 +3469,7 @@ function createAppServer() {
       if ((message.type === CLIENT_MESSAGE.COMBAT_STATE || message.type === "combat_state") && message.combat && player.id === room.hostId) {
         room.combat = mergeCombatState(room.combat, message.combat);
         room.combatVersion += 1;
+        markSnapshotDirty("legacy_combat");
         return;
       }
 
@@ -3354,7 +3507,7 @@ function createAppServer() {
         for (const client of wss.clients) {
           send(client, worldEvent);
         }
-        broadcastSnapshot();
+        markSnapshotDirty(`legacy_world:${action.type || WORLD_EVENT_KIND.SYNC}`);
         return;
       }
 
@@ -3393,7 +3546,7 @@ function createAppServer() {
           applyPlayerPatch(target, message.patch);
           target.runtime.updatedAt = Date.now();
           target.runtime.dead = (target.resources.hp || 0) <= 0;
-          broadcastSnapshot();
+          markSnapshotDirty("player_patch");
         }
         return;
       }

@@ -70,6 +70,7 @@ const statusText = document.querySelector("#status-text");
 const runtimeConfig = window.__DDD_CONFIG__ || {};
 const protocolApi = window.DDDProtocol || {};
 const sessionConfig = window.DDDSessionConfig || {};
+const multiplayerAuthorityMode = typeof sessionConfig.MULTIPLAYER_AUTHORITY_MODE === "string" ? sessionConfig.MULTIPLAYER_AUTHORITY_MODE : "server";
 
 const WORLD = {
   width: Number.isFinite(sessionConfig.WORLD_BOUNDS?.width) ? sessionConfig.WORLD_BOUNDS.width : 2600,
@@ -5911,6 +5912,10 @@ function hasLiveNetworkSession() {
   return networkUiState.socketState === "live" || networkUiState.socketState === "host";
 }
 
+function usesServerGameplayAuthority() {
+  return hasLiveNetworkSession() && multiplayerAuthorityMode !== "host";
+}
+
 function setDebugOverlayVisible(visible) {
   if (!isDevUiEnabled()) {
     debugOverlayVisible = false;
@@ -7801,7 +7806,7 @@ function getApproximateAlertPoint(sourceEnemy, ally, targetX, targetY) {
 }
 
 function notifyNearbyEnemies(sourceEnemy, playerX, playerY) {
-  if (hasLiveNetworkSession()) {
+  if (usesServerGameplayAuthority()) {
     return;
   }
   for (const ally of gameState.enemies) {
@@ -8211,8 +8216,8 @@ function getCombatSnapshot() {
     return null;
   }
 
-  const liveSession = hasLiveNetworkSession();
-  if (liveSession && gameState.serverCombatSeedReady && gameState.serverCombatSeedLevelId === gameState.levelId) {
+  const serverGameplayAuthority = usesServerGameplayAuthority();
+  if (serverGameplayAuthority && gameState.serverCombatSeedReady && gameState.serverCombatSeedLevelId === gameState.levelId) {
     return null;
   }
 
@@ -8225,14 +8230,14 @@ function getCombatSnapshot() {
     lootCollected: gameState.lootCollected,
     message: gameState.message,
     enemies: gameState.enemies.map(serializeEnemy),
-    bullets: liveSession ? [] : gameState.bullets.map(serializeBullet),
+    bullets: serverGameplayAuthority ? [] : gameState.bullets.map(serializeBullet),
     enemyBullets: gameState.enemyBullets.map(serializeBullet),
   };
 }
 
 function applyCombatSnapshotInternal(snapshot, options = {}) {
   const force = options.force === true;
-  if (!gameState || !snapshot || (!force && isRaidHost() && !hasLiveNetworkSession())) {
+  if (!gameState || !snapshot || (!force && isRaidHost())) {
     return;
   }
 
@@ -8240,7 +8245,7 @@ function applyCombatSnapshotInternal(snapshot, options = {}) {
     beginLevel(snapshot.levelId, { preservePlayer: true, preserveRunState: true });
   }
 
-  if (hasLiveNetworkSession() && Array.isArray(snapshot.enemies) && snapshot.enemies.length > 0) {
+  if (usesServerGameplayAuthority() && Array.isArray(snapshot.enemies) && snapshot.enemies.length > 0) {
     gameState.serverCombatSeedReady = true;
     gameState.serverCombatSeedLevelId = snapshot.levelId || gameState.levelId;
   }
@@ -8623,7 +8628,7 @@ function updateRemotePlayers(dt) {
 }
 
 function updateRemoteReloads() {
-  if (hasLiveNetworkSession()) {
+  if (usesServerGameplayAuthority()) {
     return;
   }
 
@@ -8770,7 +8775,7 @@ function getHeatTierFromScore(score = 0) {
 }
 
 function registerHeat(amount, reason = "", options = {}) {
-  if (!gameState || !isRaidHost() || hasLiveNetworkSession() || !(amount > 0)) {
+  if (!gameState || !isRaidHost() || usesServerGameplayAuthority() || !(amount > 0)) {
     return;
   }
 
@@ -8845,7 +8850,7 @@ function orderHeatSweep(duration = 3.8) {
 }
 
 function applyHeatEscalation() {
-  if (!gameState || !isRaidHost() || hasLiveNetworkSession()) {
+  if (!gameState || !isRaidHost() || usesServerGameplayAuthority()) {
     return;
   }
 
@@ -10145,7 +10150,7 @@ function getNetworkPatchForActor(actor, keys) {
 }
 
 function shouldReleaseSpecimen(enemy) {
-  if (hasLiveNetworkSession()) {
+  if (usesServerGameplayAuthority()) {
     return false;
   }
   if (!enemy?.contained || !enemy.hidden) {
@@ -10220,7 +10225,7 @@ function applySpecimenMeleeHit(enemy, target) {
   enemy.cooldown = enemy.fireRate + Math.random() * 0.14;
   enemy.justAlerted = true;
   enemy.aimAngle = angleTo(enemy, target);
-  if (hasLiveNetworkSession() && target.faction === "raid") {
+  if (usesServerGameplayAuthority() && target.faction === "raid") {
     return;
   }
 
@@ -10451,7 +10456,7 @@ function applyRemoteAction(playerId, action) {
     return;
   }
 
-  const authoritativeSession = hasLiveNetworkSession();
+  const authoritativeSession = usesServerGameplayAuthority();
   const actor = resolveRemoteActionActor(playerId, action.actor);
   if (!actor) {
     return;
@@ -10550,6 +10555,24 @@ function applyRemoteAction(playerId, action) {
       const now = performance.now() * 0.001;
       tracker.nextShootAt = Math.max(tracker.nextShootAt || 0, now + reloadDuration);
       tracker.reloadCompleteAt = authoritativeSession ? 0 : now + reloadDuration;
+    }
+    return;
+  }
+
+  if (action.type === "ability") {
+    const mutableActor = getMutableRaidPlayerById(playerId);
+    if (!mutableActor || mutableActor.abilityTimer > 0 || mutableActor.abilityCooldownTimer > 0) {
+      return;
+    }
+    mutableActor.abilityTimer = mutableActor.abilityDuration;
+    mutableActor.abilityCooldownTimer = mutableActor.abilityCooldown;
+    mutableActor.invisible = true;
+    if (!authoritativeSession) {
+      const patch = getNetworkPatchForActor(mutableActor, ["invisible"]);
+      if (patch) {
+        applyPlayerPatchLocally(mutableActor.id, patch);
+        window.__raidRuntime?.publishPlayerPatch(mutableActor.id, patch);
+      }
     }
     return;
   }
@@ -10665,7 +10688,7 @@ function shootPlayer() {
     (pellet - (pelletCount - 1) * 0.5) * weapon.spread + (Math.random() - 0.5) * weapon.spread * 0.45
   );
 
-  if (hasLiveNetworkSession()) {
+  if (usesServerGameplayAuthority()) {
     for (const spread of spreads) {
       firePredictedBullet(player, player.angle + spread, weapon.bulletSpeed, weapon.damage, {
         ownerId: gameState.localNetworkId || "local",
@@ -10894,6 +10917,12 @@ function useClassAbility() {
   player.invisible = true;
   gameState.message = "Cloak engaged.";
   statusText.textContent = gameState.message;
+  if (!isRaidHost()) {
+    window.__raidRuntime?.publishPlayerAction({
+      type: "ability",
+      actor: { x: player.x, y: player.y, angle: player.angle, radius: player.radius, className: selectedClass },
+    });
+  }
   syncHud();
 }
 
@@ -10906,7 +10935,7 @@ function interact() {
   const player = gameState.player;
   const objectiveLabels = getObjectiveLabels();
   const nextLevelId = getNextLevelId();
-  if (hasLiveNetworkSession()) {
+  if (usesServerGameplayAuthority()) {
     const nearbyDoor = getNearbyDoor(player);
     if (nearbyDoor) {
       gameState.message = nearbyDoor.open ? "Syncing door close..." : "Syncing door open...";
@@ -11545,7 +11574,7 @@ function damageCrate(crate, amount, impactX, impactY) {
 }
 
 function updateBullets(dt) {
-  if (hasLiveNetworkSession()) {
+  if (usesServerGameplayAuthority()) {
     for (const bullet of gameState.predictedBullets) {
       bullet.prevX = bullet.x;
       bullet.prevY = bullet.y;
@@ -11853,7 +11882,7 @@ function updateBullets(dt) {
 }
 
 function updateEnemies(dt) {
-  if (hasLiveNetworkSession()) {
+  if (usesServerGameplayAuthority()) {
     return;
   }
   for (const enemy of gameState.enemies) {
@@ -12188,7 +12217,7 @@ function updateEnemies(dt) {
         const spreadBase = typePenalty + rangePenalty * (enemy.kind === "boss" ? 0.02 : 0.045) + movePenalty + alertPenalty + (woundedHuman ? 0.05 + enemy.woundedSeverity * 0.06 : 0);
         enemy.aimAngle = turnToward(enemy.aimAngle, baseShotAngle, dt * 11);
 
-        if (hasLiveNetworkSession() && activeTarget?.faction === "raid") {
+        if (usesServerGameplayAuthority() && activeTarget?.faction === "raid") {
           enemy.cooldown = enemy.fireRate + Math.random() * 0.16;
           enemy.strafeBias *= -1;
           enemy.muzzleFlash = 0.08;
@@ -12366,7 +12395,7 @@ function updateParticles(dt) {
 }
 
 function updateHeat() {
-  if (hasLiveNetworkSession()) {
+  if (usesServerGameplayAuthority()) {
     return;
   }
   const progress = clamp(gameState.duration > 0 ? gameState.elapsed / gameState.duration : 0, 0, 0.999);
@@ -12725,7 +12754,7 @@ function update(dt) {
 
   updatePlayer(dt);
   reconcileLocalPlayer(dt);
-  if (isRaidHost() && !hasLiveNetworkSession()) {
+  if (isRaidHost()) {
     updateBullets(dt);
     updateEnemies(dt);
     updateHeat();
@@ -14427,6 +14456,11 @@ window.__raidRuntime = {
     return {
       moveX,
       moveY,
+      x: player.x,
+      y: player.y,
+      radius: player.radius,
+      vx: player.vx,
+      vy: player.vy,
       aimAngle: player.angle,
       shootPressed: Boolean(actionState.shootPressed),
       fireHeld: Boolean(pointer.down),

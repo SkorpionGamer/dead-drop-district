@@ -5,6 +5,8 @@
   const SERVER_MESSAGE = protocol.SERVER_MESSAGE || {};
   const UI_EVENT_KIND = protocol.UI_EVENT_KIND || {};
   const COMBAT_EVENT_KIND = protocol.COMBAT_EVENT_KIND || {};
+  const sessionConfig = window.DDDSessionConfig || {};
+  const hostAuthoritativeMultiplayer = sessionConfig.MULTIPLAYER_AUTHORITY_MODE === "host";
 
   if (!runtime) {
     return;
@@ -131,7 +133,7 @@
     runtime.setPresenceCount(message.playerCount || remotes.length + (localId ? 1 : 0));
 
     const localPlayer = message.players.find((player) => player.id === localId);
-    if (localPlayer?.initialized) {
+    if (localPlayer?.initialized && !(hostAuthoritativeMultiplayer && runtime.isRaidHost?.())) {
       runtime.applyAuthoritativeLocalState?.(localPlayer);
     }
 

@@ -104,7 +104,7 @@ test("combat snapshots keep stable ids for enemy bullets", async ({ page }) => {
   expect(typeof result.ownerEnemyId).toBe("string");
 });
 
-test("live-session specimen melee no longer mutates local hp on the host runtime", async ({ page }) => {
+test("live-session host authority still applies specimen melee damage", async ({ page }) => {
   await openRaid(page, "stealther");
 
   const result = await page.evaluate(() => {
@@ -121,10 +121,10 @@ test("live-session specimen melee no longer mutates local hp on the host runtime
     };
   });
 
-  expect(result.afterHp).toBe(result.beforeHp);
+  expect(result.afterHp).toBeLessThan(result.beforeHp);
 });
 
-test("live-session enemy update no longer advances host enemy AI", async ({ page }) => {
+test("live-session host authority still advances host enemy AI", async ({ page }) => {
   await openRaid(page, "stealther");
 
   const result = await page.evaluate(() => {
@@ -167,13 +167,10 @@ test("live-session enemy update no longer advances host enemy AI", async ({ page
     };
   });
 
-  expect(result.enemyBulletCount).toBe(0);
-  expect(result.moved).toBeFalsy();
-  expect(result.cooldownChanged).toBeFalsy();
-  expect(result.muzzleFlash).toBe(0);
+  expect(result.enemyBulletCount > 0 || result.moved || result.cooldownChanged || result.muzzleFlash > 0).toBeTruthy();
 });
 
-test("live-session host encounter helpers stand down for heat and specimen release", async ({ page }) => {
+test("live-session host authority keeps heat and specimen release active", async ({ page }) => {
   await openRaid(page, "stealther");
 
   const result = await page.evaluate(() => {
@@ -195,11 +192,11 @@ test("live-session host encounter helpers stand down for heat and specimen relea
     };
   });
 
-  expect(result.heatScore).toBe(0);
-  expect(result.shouldRelease).toBeFalsy();
+  expect(result.heatScore).toBeGreaterThan(0);
+  expect(result.shouldRelease).toBeTruthy();
 });
 
-test("live-session host stops publishing combat snapshots after server authority seeds combat", async ({ page }) => {
+test("live-session host authority keeps publishing combat snapshots", async ({ page }) => {
   await openRaid(page, "stealther");
 
   const result = await page.evaluate(() => {
@@ -220,8 +217,8 @@ test("live-session host stops publishing combat snapshots after server authority
   });
 
   expect(result.beforeSeedEnemyCount).toBeGreaterThan(0);
-  expect(result.seedReady).toBeTruthy();
-  expect(result.afterSeedIsNull).toBeTruthy();
+  expect(result.seedReady).toBeFalsy();
+  expect(result.afterSeedIsNull).toBeFalsy();
 });
 
 test("classes apply distinct starting loadouts", async ({ page }) => {

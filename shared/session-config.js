@@ -101,9 +101,12 @@
     remoteSampleTtlMs: 1000,
   });
 
+  const MULTIPLAYER_AUTHORITY_MODE = "host";
+
   return {
     WORLD_BOUNDS,
     CLASS_LOADOUTS,
     MOVEMENT_RECONCILIATION,
+    MULTIPLAYER_AUTHORITY_MODE,
   };
 });

@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const { WebSocketServer } = require("ws");
 const { MULTIPLAYER } = require("../shared/multiplayer");
-const { WORLD_BOUNDS, CLASS_LOADOUTS } = require("../shared/session-config");
+const { WORLD_BOUNDS, CLASS_LOADOUTS, MULTIPLAYER_AUTHORITY_MODE } = require("../shared/session-config");
 const {
   PROTOCOL_VERSION,
   ROOM_PHASE,
@@ -44,6 +44,7 @@ const PLAYER_ACTION_COOLDOWNS_MS = Object.freeze({
   noise: 450,
   takedown: 450,
 });
+const IS_HOST_AUTHORITATIVE_MULTIPLAYER = MULTIPLAYER_AUTHORITY_MODE === "host";
 const HEAT_SCORE_THRESHOLDS = Object.freeze({ 1: 0, 2: 2.2, 3: 5.1, 4: 8.6 });
 const STEALTH_TUNING = Object.freeze({
   quietSightRangeMultiplier: 0.72,
@@ -2219,6 +2220,28 @@ function applyInputFrame(player, frame, room, sequence = 0) {
         : null,
   };
 
+  if (IS_HOST_AUTHORITATIVE_MULTIPLAYER) {
+    const bounds = room.world?.bounds || WORLD_BOUNDS;
+    player.position.radius = clamp(
+      finiteNumber(Number(state.radius ?? frame.radius), player.position.radius),
+      8,
+      Math.min(bounds.width, bounds.height) * 0.25
+    );
+    player.position.x = clamp(
+      finiteNumber(Number(state.x ?? frame.x), player.position.x),
+      player.position.radius,
+      bounds.width - player.position.radius
+    );
+    player.position.y = clamp(
+      finiteNumber(Number(state.y ?? frame.y), player.position.y),
+      player.position.radius,
+      bounds.height - player.position.radius
+    );
+    player.position.vx = finiteNumber(Number(state.vx ?? frame.vx), player.position.vx);
+    player.position.vy = finiteNumber(Number(state.vy ?? frame.vy), player.position.vy);
+    player.position.angle = finiteNumber(Number(state.angle ?? frame.aimAngle ?? state.aimAngle), player.position.angle);
+  }
+
   if (shouldSeedState) {
     const spawn = frame.spawn && typeof frame.spawn === "object" ? frame.spawn : state;
     player.position.x = finiteNumber(Number(spawn.x), player.position.x);
@@ -3344,21 +3367,32 @@ function createAppServer() {
     const tickStartedAt = Date.now();
     const eventLoopLagMs = Math.max(0, tickStartedAt - room.lastTickAt - MULTIPLAYER.tickRateMs);
     room.lastTickAt = tickStartedAt;
-    simulatePlayers(room);
-    const playerCombatMutated = processPlayerCombatActions(room, {
-      broadcastCombatEvent,
-    });
-    const { combatMutated: enemyCombatMutated, worldMutated: enemyWorldMutated } = simulateEnemyAuthority(room, MULTIPLAYER.tickRateMs / 1000);
-    const { combatMutated, worldMutated } = simulateAuthoritativeCombat(room, MULTIPLAYER.tickRateMs / 1000, {
-      broadcastCombatEvent,
-      broadcastUiEvent,
-    });
-    const encounterMutated = updateEncounterAuthority(room);
-    if (playerCombatMutated || enemyCombatMutated || combatMutated || encounterMutated) {
-      room.combatVersion += 1;
-    }
-    if (enemyWorldMutated || worldMutated) {
-      room.worldVersion += 1;
+    let playerCombatMutated = false;
+    let enemyCombatMutated = false;
+    let enemyWorldMutated = false;
+    let combatMutated = false;
+    let worldMutated = false;
+    let encounterMutated = false;
+    if (!IS_HOST_AUTHORITATIVE_MULTIPLAYER) {
+      simulatePlayers(room);
+      playerCombatMutated = processPlayerCombatActions(room, {
+        broadcastCombatEvent,
+      });
+      ({ combatMutated: enemyCombatMutated, worldMutated: enemyWorldMutated } = simulateEnemyAuthority(
+        room,
+        MULTIPLAYER.tickRateMs / 1000
+      ));
+      ({ combatMutated, worldMutated } = simulateAuthoritativeCombat(room, MULTIPLAYER.tickRateMs / 1000, {
+        broadcastCombatEvent,
+        broadcastUiEvent,
+      }));
+      encounterMutated = updateEncounterAuthority(room);
+      if (playerCombatMutated || enemyCombatMutated || combatMutated || encounterMutated) {
+        room.combatVersion += 1;
+      }
+      if (enemyWorldMutated || worldMutated) {
+        room.worldVersion += 1;
+      }
     }
     recomputeRoomPhase();
     if (playerCombatMutated || enemyCombatMutated || combatMutated || enemyWorldMutated || worldMutated || encounterMutated) {
@@ -3524,6 +3558,15 @@ function createAppServer() {
             : message.type === "player_action"
               ? message.action
               : null;
+      if (IS_HOST_AUTHORITATIVE_MULTIPLAYER && playerRequest) {
+        if (room.hostId && room.hostId !== player.id) {
+          const host = room.players.get(room.hostId);
+          if (host?.socket) {
+            send(host.socket, { type: "player_action", playerId: player.id, action: playerRequest });
+          }
+        }
+        return;
+      }
       if (playerRequest?.type === "interact") {
         applyInteractAction(player);
         recomputeRoomPhase();

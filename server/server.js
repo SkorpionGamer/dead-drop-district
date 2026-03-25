@@ -2172,11 +2172,14 @@ function applyInputFrame(player, frame, room, sequence = 0) {
   const previousClassName = player.meta.className;
   const previousRunning = player.runtime.running;
   const incomingClassName = frame.className || state.className || player.meta.className;
+  const nextRunning =
+    typeof state.running === "boolean" ? state.running : typeof frame.running === "boolean" ? frame.running : player.runtime.running;
   const shouldSeedState =
-    !player.runtime.initialized ||
-    (previousRunning === false && state.running === true) ||
-    (incomingClassName && incomingClassName !== previousClassName) ||
-    room.phase !== ROOM_PHASE.RUNNING;
+    nextRunning &&
+    (!player.runtime.initialized ||
+      (previousRunning === false && nextRunning === true) ||
+      (incomingClassName && incomingClassName !== previousClassName) ||
+      room.phase !== ROOM_PHASE.RUNNING);
 
   player.meta.className = incomingClassName;
   player.meta.weaponLabel = frame.weaponLabel || state.weaponLabel || player.meta.weaponLabel;
@@ -2185,7 +2188,7 @@ function applyInputFrame(player, frame, room, sequence = 0) {
   player.meta.spriteVariant =
     typeof frame.spriteVariant === "string" || frame.spriteVariant === null ? frame.spriteVariant : player.meta.spriteVariant;
   player.position.angle = finiteNumber(Number(frame.aimAngle ?? state.angle), player.position.angle);
-  player.runtime.running = typeof state.running === "boolean" ? state.running : typeof frame.running === "boolean" ? frame.running : player.runtime.running;
+  player.runtime.running = nextRunning;
   player.runtime.quietMode =
     typeof frame.quietMode === "boolean" ? frame.quietMode : typeof frame.quietHeld === "boolean" ? frame.quietHeld : player.runtime.quietMode;
   player.runtime.updatedAt = Date.now();
@@ -2760,7 +2763,9 @@ function simulateAuthoritativeCombat(room, dt, emitters = {}) {
   }
 
   const initializedRaidPlayers = getConnectedPlayers(room).filter((player) => player.runtime.initialized);
+  const raidHasStarted = room.phase === ROOM_PHASE.RUNNING || initializedRaidPlayers.some((player) => player.runtime.running);
   if (
+    raidHasStarted &&
     initializedRaidPlayers.length > 0 &&
     initializedRaidPlayers.every((player) => player.runtime.dead || !player.runtime.running || (player.resources.hp || 0) <= 0)
   ) {
